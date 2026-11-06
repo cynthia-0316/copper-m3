@@ -1,6 +1,7 @@
-// Module 2: the four tools Ask Copper can use. Products and prices come from
+// The tools Ask Copper can use. Module 2's four: products and prices come from
 // lib/copper/catalog.ts and stock from lib/copper/inventory.ts, so the
-// chatbot never has to make them up.
+// chatbot never has to make them up. Module 3 adds search_docs, which finds
+// the passages of the customer documents that answer a question.
 // Each tool returns plain data; the model writes the reply around it.
 import { tool } from "ai";
 import { z } from "zod";
@@ -11,6 +12,7 @@ import {
   type ProductId,
 } from "@/lib/copper/catalog";
 import { readInventory } from "@/lib/copper/inventory";
+import { searchDocs, searchDocsInput } from "@/lib/copper/rag/search";
 
 export type ProductList = {
   products: {
@@ -200,5 +202,11 @@ export const copperTools = {
       "Checks today's stock for a Copper product, for every color or just one.",
     inputSchema: checkAvailabilityInput,
     execute: async (input) => checkAvailability(input),
+  }),
+  search_docs: tool({
+    description:
+      "Searches Copper's customer documents (the Copper Home and Copper Notes user guides, the Terms and Conditions, and the Copper Plus FAQ) for setup, troubleshooting, error codes, warranty, returns, refunds, subscription and privacy questions. Returns the 5 most relevant passages, each with its document title, page number and a link that opens the PDF at that page.",
+    inputSchema: searchDocsInput,
+    execute: async (input) => searchDocs(input.query),
   }),
 };

@@ -9,6 +9,7 @@ import {
   ArrowRightIcon,
   ArrowUpIcon,
   BrainIcon,
+  ExternalLinkIcon,
   MessageCircleIcon,
   TriangleAlertIcon,
   WrenchIcon,
@@ -28,6 +29,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { readLive } from "@/lib/ai/live";
 import { askCopper, type ChatMessage } from "@/lib/copper/assistant/ask";
+import { sourcesOf, splitReply } from "@/lib/copper/assistant/citations";
 import {
   type Progress,
   type ToolStep,
@@ -40,6 +42,7 @@ const STARTERS = [
   "How much is Copper Home with Copper Plus, paid yearly, for 2 years?",
   "Is Copper Notes in Night Sky in stock?",
   "Is Copper Plus cheaper monthly or yearly?",
+  "What does error code C-47 mean?",
 ];
 
 type Turn = { question: string; progress: Progress };
@@ -148,7 +151,7 @@ export function AskCopper({ aiConfigured }: { aiConfigured: boolean }) {
                   Ask Copper
                 </SheetTitle>
                 <SheetDescription className="text-xs text-white/70">
-                  Prices, totals and stock, checked with tools.
+                  Prices, stock and help from our documents, checked with tools.
                 </SheetDescription>
               </div>
               <SheetClose asChild>
@@ -197,8 +200,8 @@ export function AskCopper({ aiConfigured }: { aiConfigured: boolean }) {
                   <div className="space-y-2">
                     {turns.length === 0 && (
                       <p className="text-muted-foreground text-sm">
-                        Hi, I&apos;m Copper! Ask me about prices, totals or
-                        stock. Try one of these:
+                        Hi, I&apos;m Copper! Ask me about prices, stock, setup
+                        or warranty. Try one of these:
                       </p>
                     )}
                     {STARTERS.map((starter) => (
@@ -383,7 +386,7 @@ function Answer({
             </div>
           )}
           <p className="text-sm whitespace-pre-wrap">
-            {reply}
+            <ReplyText reply={reply} sources={sourcesOf(steps)} />
             {working && (
               <span className="bg-primary ml-0.5 inline-block h-4 w-0.5 animate-pulse align-middle" />
             )}
@@ -392,6 +395,46 @@ function Answer({
       )}
     </div>
   );
+}
+
+/**
+ * Copper's reply, with each source citation drawn as a link to that PDF page.
+ * A citation is a link only if it matches a passage search_docs returned for
+ * this answer; otherwise it is shown as flagged plain text, never as a link.
+ */
+function ReplyText({
+  reply,
+  sources,
+}: {
+  reply: string;
+  sources: Map<string, string>;
+}) {
+  return splitReply(reply, sources).map((segment, i) => {
+    if (segment.type === "text") return segment.text;
+    if (!segment.verified)
+      return (
+        <span
+          key={i}
+          data-testid="citation-unverified"
+          title="This source wasn't in the search results"
+          className="text-chart-3 underline decoration-dotted"
+        >
+          [{segment.label}]
+        </span>
+      );
+    return (
+      <a
+        key={i}
+        data-testid="citation"
+        href={segment.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary font-medium underline underline-offset-2"
+      >
+        [{segment.label}]
+      </a>
+    );
+  });
 }
 
 function Station({
@@ -603,6 +646,45 @@ function ToolOutput({ name, output }: { name: string; output: any }) {
           </div>
         ))}
       </div>
+    );
+  }
+  if (name === "search_docs" && output?.status) {
+    if (output.status === "unavailable")
+      return <p className="text-xs">{output.message}</p>;
+    return (
+      <ol data-testid="doc-results" className="space-y-2 text-xs">
+        {output.results.map((hit: any) => (
+          <li
+            key={hit.id}
+            data-testid="doc-result"
+            className="bg-background rounded-lg border p-2"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <p className="font-semibold">{hit.title}</p>
+              <span className="bg-accent/15 shrink-0 rounded-full px-2 py-0.5 font-mono">
+                page {hit.page}
+              </span>
+            </div>
+            <p className="text-muted-foreground mt-1 line-clamp-3 whitespace-pre-line">
+              {hit.text}
+            </p>
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <a
+                href={hit.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary inline-flex items-center gap-1 font-medium underline underline-offset-2"
+              >
+                <ExternalLinkIcon className="size-3" />
+                Open page {hit.page}
+              </a>
+              <span className="text-muted-foreground font-mono">
+                similarity {Number(hit.score).toFixed(2)}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ol>
     );
   }
   // A tool without its own layout yet: show what came back as plain text.

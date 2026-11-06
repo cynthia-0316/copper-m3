@@ -1,8 +1,14 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { generateText, Output, streamText } from "ai";
+import { embedMany, generateText, Output, streamText } from "ai";
 import type { z } from "zod";
-import { defaultModel, MODELS, type ModelId } from "@/lib/ai/models";
-import { costUsd } from "@/lib/ai/pricing";
+import {
+  defaultModel,
+  EMBEDDING_MODEL,
+  type EmbeddingModelId,
+  MODELS,
+  type ModelId,
+} from "@/lib/ai/models";
+import { costUsd, embeddingCostUsd } from "@/lib/ai/pricing";
 
 // Every model call in the app goes through this file, so each one is logged
 // with its tokens, cost and how long it took. The log goes to the terminal
@@ -36,7 +42,7 @@ type TextOptions = DistributiveOmit<
 export type AiCallRow = {
   module: number;
   feature: string;
-  model: ModelId;
+  model: ModelId | EmbeddingModelId;
   input_tokens: number | null;
   output_tokens: number | null;
   cost_usd: number | null;
@@ -45,15 +51,19 @@ export type AiCallRow = {
   created_at: string;
 };
 
-function languageModel(model: ModelId) {
+function googleProvider() {
   const googleKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
   if (!googleKey) throw new AiNotConfiguredError();
+  return createGoogleGenerativeAI({ apiKey: googleKey });
+}
+
+function languageModel(model: ModelId) {
   const entry = MODELS.find((m) => m.id === model);
   const id =
     entry && "googleId" in entry
       ? entry.googleId
       : model.slice("google/".length);
-  return createGoogleGenerativeAI({ apiKey: googleKey })(id);
+  return googleProvider()(id);
 }
 
 /** Prints one line per model call, so the cost and time are visible. */
@@ -147,14 +157,74 @@ export function callStream(info: CallInfo, options: StreamOptions) {
   });
 }
 
-// Asking for some thinking (rather than letting the model decide) is what
-// makes Gemini write a summary even for an easy question.
-const THINKING = { includeThoughts: true, thinkingBudget: 1024 };
+/** What the embedding is for: documents to search, or the question asked. */
+export type EmbedTaskType = "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+
+/**
+ * Turns texts into embedding vectors, logged to ai_calls like every call.
+ * Gemini's vectors are only unit length at full size, so normalize them
+ * (lib/copper/rag/vectors.ts) before comparing. Batches of 100 texts are sent
+ * one at a time, to stay inside the free tier's limits.
+ * Example: callEmbed({ module: 3, feature: "build-index" },
+ *   { values, taskType: "RETRIEVAL_DOCUMENT" })
+ */
+export async function callEmbed(
+  info: Omit<CallInfo, "model">,
+  {
+    values,
+    taskType,
+    dimensions = EMBEDDING_MODEL.dimensions,
+  }: { values: string[]; taskType: EmbedTaskType; dimensions?: number },
+): Promise<{ embeddings: number[][]; tokens: number | null }> {
+  if (values.length === 0) return { embeddings: [], tokens: 0 };
+  const started = performance.now();
+  const row = (ok: boolean, tokens?: number): AiCallRow => {
+    const input = Number.isFinite(tokens) ? (tokens as number) : null;
+    return {
+      module: info.module,
+      feature: info.feature,
+      model: EMBEDDING_MODEL.id,
+      input_tokens: input,
+      output_tokens: null,
+      cost_usd:
+        input !== null ? embeddingCostUsd(EMBEDDING_MODEL.id, input) : null,
+      latency_ms: Math.round(performance.now() - started),
+      ok,
+      created_at: new Date().toISOString(),
+    };
+  };
+  try {
+    const result = await embedMany({
+      model: googleProvider().embedding(EMBEDDING_MODEL.googleId),
+      values,
+      dimensions,
+      maxParallelCalls: 1,
+      providerOptions: { google: { taskType } },
+    });
+    await logCall(row(true, result.usage.tokens));
+    const tokens = Number.isFinite(result.usage.tokens)
+      ? result.usage.tokens
+      : null;
+    return { embeddings: result.embeddings, tokens };
+  } catch (error) {
+    if (!(error instanceof AiNotConfiguredError)) await logCall(row(false));
+    throw error;
+  }
+}
 
 /**
  * Asks Gemini to include a summary of its thinking in the stream (as
- * reasoning parts). Other models ignore it. Pass as `providerOptions`.
+ * reasoning parts). Asking for some thinking (rather than letting the model
+ * decide) is what makes Gemini write a summary even for an easy question.
+ * Gemini 2.5 is told how much to think with a token budget; Gemini 3 models
+ * take a level instead (their docs don't describe a budget), so each model
+ * gets the setting it understands, never both. Pass as `providerOptions`.
  */
-export const THOUGHT_SUMMARIES = {
-  google: { thinkingConfig: THINKING },
-};
+export function thoughtSummaries(model: ModelId = defaultModel()) {
+  const entry = MODELS.find((m) => m.id === model);
+  const how =
+    entry?.thinking === "budget"
+      ? { thinkingBudget: 1024 }
+      : { thinkingLevel: "low" as const };
+  return { google: { thinkingConfig: { includeThoughts: true, ...how } } };
+}

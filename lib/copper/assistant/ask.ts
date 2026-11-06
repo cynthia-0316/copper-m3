@@ -5,7 +5,7 @@
 // and sends back each step as it happens, so the panel can show Copper
 // thinking and using its tools.
 import { stepCountIs } from "ai";
-import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
+import { callStream, thoughtSummaries } from "@/lib/ai/call";
 import { createLive, type Live } from "@/lib/ai/live";
 import { COPPER_INSTRUCTIONS } from "@/lib/copper/assistant/instructions";
 import type { Progress, ToolStep } from "@/lib/copper/assistant/progress";
@@ -48,7 +48,7 @@ export async function askCopper({
     { module: 2, feature: "ask-copper" },
     {
       messages,
-      providerOptions: THOUGHT_SUMMARIES,
+      providerOptions: thoughtSummaries(),
       ...(useTools && {
         instructions: COPPER_INSTRUCTIONS,
         tools: copperTools,

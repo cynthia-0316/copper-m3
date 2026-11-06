@@ -109,11 +109,11 @@ describe("lib/ai/call.ts", () => {
     expect(result.usage).toBeDefined();
   });
 
-  it("uses Gemini 2.5 Flash when no model is given", async () => {
+  it("uses Gemini 3.6 Flash when no model is given", async () => {
     const rows = captureLog();
     model = replyWith("ok");
     await callText({ module: 1, feature: "test" }, { prompt: "hi" });
-    expect(rows()[0].model).toBe("google/gemini-2.5-flash");
+    expect(rows()[0].model).toBe("google/gemini-3.6-flash");
   });
 
   it("logs failed calls with ok: false and re-throws the error", async () => {
